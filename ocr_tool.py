@@ -1,31 +1,58 @@
 import streamlit as st
+from datetime import datetime
+from PIL import Image
+import pytesseract
+import pdf2image
+import tempfile
+import os
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-st.set_page_config(page_title="Free OCR Tool", layout="centered")
-st.title("🧾 Free OCR Tool")
+# Set up Google Sheets API
+def get_gsheet_client():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("creds/credentials.json", scope)
+    client = gspread.authorize(creds)
+    return client
 
-try:
-    import pytesseract
-    from PIL import Image
-    import cv2
-    import numpy as np
+def append_to_gsheet(sheet_id, file_name, text):
+    client = get_gsheet_client()
+    sheet = client.open_by_key(sheet_id).sheet1
+    now = datetime.now().strftime("%Y-%m-%d")
+    sheet.append_row([file_name, text, now])
 
-    uploaded_file = st.file_uploader("📤 Upload Image", type=["jpg", "jpeg", "png"])
+# OCR function for images
+def extract_text_from_image(image):
+    return pytesseract.image_to_string(image)
 
-    if uploaded_file is not None:
-        st.info("Image uploaded. Processing...")
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+# OCR function for PDFs
+def extract_text_from_pdf(uploaded_pdf):
+    with tempfile.TemporaryDirectory() as path:
+        images = pdf2image.convert_from_bytes(uploaded_pdf.read(), dpi=300, output_folder=path)
+        text = ""
+        for img in images:
+            text += pytesseract.image_to_string(img) + "\n"
+    return text
 
-        image_np = np.array(image)
-        gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+# Streamlit UI
+st.title("📄 OCR to Google Sheets Tool")
+sheet_id = st.text_input("Enter your Google Sheet ID", "")
 
-        text = pytesseract.image_to_string(gray)
+uploaded_file = st.file_uploader("Upload an image or PDF file", type=["png", "jpg", "jpeg", "pdf"])
 
-        st.success("✅ Text extraction complete!")
-        st.subheader("📝 Extracted Text:")
-        st.text_area("", text, height=300)
+if uploaded_file and sheet_id:
+    file_name = uploaded_file.name
+    if uploaded_file.type == "application/pdf":
+        text = extract_text_from_pdf(uploaded_file)
     else:
-        st.warning("👈 Please upload an image file to begin.")
+        image = Image.open(uploaded_file)
+        text = extract_text_from_image(image)
 
-except Exception as e:
-    st.error(f"🚨 App failed to load properly. Error: {e}")
+    st.text_area("Extracted Text", text, height=300)
+    
+    if st.button("Send to Google Sheet"):
+        try:
+            append_to_gsheet(sheet_id, file_name, text)
+            st.success("Data sent to Google Sheet!")
+        except Exception as e:
+            st.error(f"Error: {e}")
