@@ -1,6 +1,6 @@
 streamlit
-pytesseract
-Pillow
+easyocr
 pdf2image
+Pillow
 gspread
 oauth2client
