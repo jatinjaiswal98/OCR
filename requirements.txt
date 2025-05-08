@@ -1,5 +1,6 @@
 streamlit
 pytesseract
-opencv-python-headless
-pillow
-numpy
+Pillow
+pdf2image
+gspread
+oauth2client
