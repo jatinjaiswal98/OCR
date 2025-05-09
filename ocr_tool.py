@@ -1,63 +1,87 @@
 import streamlit as st
-from datetime import datetime
+import pytesseract
 from PIL import Image
-import easyocr
-import pdf2image
-import tempfile
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import pandas as pd
+import io
+import os
+import base64
+from datetime import datetime
 
-# Initialize OCR Reader
-reader = easyocr.Reader(['en'], gpu=False)
+st.set_page_config(page_title="Vendor Onboarding", layout="wide")
 
-# Set up Google Sheets API
-def get_gsheet_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("creds/credentials.json", scope)
-    client = gspread.authorize(creds)
-    return client
+st.title("📋 Vendor Onboarding Portal")
 
-def append_to_gsheet(sheet_id, file_name, text):
-    client = get_gsheet_client()
-    sheet = client.open_by_key(sheet_id).sheet1
-    now = datetime.now().strftime("%Y-%m-%d")
-    sheet.append_row([file_name, text, now])
+# Initialize session state
+if "data" not in st.session_state:
+    st.session_state.data = []
 
-# OCR function for image
-def extract_text_from_image(image):
-    result = reader.readtext(image, detail=0)
-    return "\n".join(result)
+st.subheader("Vendor Information")
 
-# OCR function for PDF
-def extract_text_from_pdf(uploaded_pdf):
-    with tempfile.TemporaryDirectory() as path:
-        images = pdf2image.convert_from_bytes(uploaded_pdf.read(), dpi=300, output_folder=path)
-        text = ""
-        for img in images:
-            result = reader.readtext(img, detail=0)
-            text += "\n".join(result) + "\n"
-    return text
+vendor_name = st.text_input("Vendor Name")
+email = st.text_input("Email")
+category = st.selectbox("Category", ["Goods", "Services", "Consulting", "Others"])
 
-# Streamlit UI
-st.title("📄 OCR to Google Sheets Tool")
+st.subheader("Upload Required Documents")
+trade_license = st.file_uploader("Upload Trade License (PDF/Image)", type=["png", "jpg", "jpeg", "pdf"])
+bank_proof = st.file_uploader("Upload Cancelled Cheque / Bank Proof", type=["png", "jpg", "jpeg", "pdf"])
+gst_cert = st.file_uploader("Upload GST Certificate", type=["png", "jpg", "jpeg", "pdf"])
 
-sheet_id = st.text_input("Enter your Google Sheet ID", "")
 
-uploaded_file = st.file_uploader("Upload an image or PDF file", type=["png", "jpg", "jpeg", "pdf"])
+def extract_text(file):
+    try:
+        if file.type.startswith("image"):
+            img = Image.open(file)
+            text = pytesseract.image_to_string(img)
+            return text
+        else:
+            return "[PDF parsing not implemented in demo]"
+    except Exception as e:
+        return f"Error: {e}"
 
-if uploaded_file and sheet_id:
-    file_name = uploaded_file.name
-    if uploaded_file.type == "application/pdf":
-        text = extract_text_from_pdf(uploaded_file)
+
+def score_documents(*docs):
+    score = 0
+    total = len(docs)
+    for doc in docs:
+        if doc:
+            score += 1
+    return int((score / total) * 100)
+
+
+if st.button("Submit Vendor Info"):
+    if vendor_name and email:
+        trade_text = extract_text(trade_license) if trade_license else "Not uploaded"
+        bank_text = extract_text(bank_proof) if bank_proof else "Not uploaded"
+        gst_text = extract_text(gst_cert) if gst_cert else "Not uploaded"
+
+        score = score_documents(trade_license, bank_proof, gst_cert)
+
+        record = {
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Vendor Name": vendor_name,
+            "Email": email,
+            "Category": category,
+            "Score": f"{score}%",
+            "Trade License Extract": trade_text[:100],
+            "Bank Proof Extract": bank_text[:100],
+            "GST Extract": gst_text[:100]
+        }
+
+        st.session_state.data.append(record)
+        st.success(f"Vendor data submitted successfully with score: {score}%")
     else:
-        image = Image.open(uploaded_file)
-        text = extract_text_from_image(image)
+        st.error("Please fill in all required fields.")
 
-    st.text_area("Extracted Text", text, height=300)
 
-    if st.button("Send to Google Sheet"):
-        try:
-            append_to_gsheet(sheet_id, file_name, text)
-            st.success("✅ Data sent to Google Sheet!")
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
+st.subheader("Submitted Vendors")
+
+if st.session_state.data:
+    df = pd.DataFrame(st.session_state.data)
+    st.dataframe(df)
+
+    csv = df.to_csv(index=False).encode('utf-8')
+    b64 = base64.b64encode(csv).decode()
+    href = f'<a href="data:file/csv;base64,{b64}" download="vendor_submissions.csv">📥 Download CSV</a>'
+    st.markdown(href, unsafe_allow_html=True)
+else:
+    st.info("No vendor submissions yet.")
